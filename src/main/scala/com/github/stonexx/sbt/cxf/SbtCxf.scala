@@ -5,18 +5,18 @@ import java.net.MalformedURLException
 
 import sbt.Keys._
 import sbt._
-import sbt.classpath.ClasspathUtilities
+import sbt.internal.inc.classpath.ClasspathUtilities
 
 import scala.util.Try
 
 object Import {
 
-  val cxf = config("cxf")
+  val Cxf = config("Cxf")
 
   object CxfKeys {
 
     val wsdl2java = TaskKey[Seq[File]]("cxf-wsdl2java", "Generates java files from wsdls")
-    val wsdls     = SettingKey[Seq[Wsdl]]("cxf-wsdls", "wsdls to generate java files from")
+    val wsdls = SettingKey[Seq[Wsdl]]("cxf-wsdls", "wsdls to generate java files from")
 
   }
 
@@ -29,6 +29,7 @@ object Import {
 object SbtCxf extends AutoPlugin {
 
   override def requires = sbt.plugins.JvmPlugin
+
   override def trigger = AllRequirements
 
   val autoImport = Import
@@ -36,33 +37,33 @@ object SbtCxf extends AutoPlugin {
   import autoImport._
   import CxfKeys._
 
+  def download(url: sbt.URL, file: File): Unit = {
+    IO.writeLines(file, IO.readLinesURL(url))
+  }
+
   override def projectSettings: Seq[Setting[_]] = Seq(
-    ivyConfigurations += cxf,
-    version in cxf := "3.1.7",
-    libraryDependencies <++= (version in cxf)(version => Seq(
-      "org.apache.cxf" % "cxf-tools-wsdlto-core" % version % cxf,
-      "org.apache.cxf" % "cxf-tools-wsdlto-databinding-jaxb" % version % cxf,
-      "org.apache.cxf" % "cxf-tools-wsdlto-frontend-jaxws" % version % cxf
-    )),
+    ivyConfigurations += Cxf,
+    version in Cxf := "3.1.7",
+    libraryDependencies ++= (version in Cxf) (version => Seq(
+      "org.apache.cxf" % "cxf-tools-wsdlto-core" % version % Cxf,
+      "org.apache.cxf" % "cxf-tools-wsdlto-databinding-jaxb" % version % Cxf,
+      "org.apache.cxf" % "cxf-tools-wsdlto-frontend-jaxws" % version % Cxf
+    )).value,
     wsdls := Nil,
-    managedClasspath in cxf <<= (classpathTypes in cxf, update) map { (ct, report) =>
-      Classpaths.managedJars(cxf, ct, report)
-    },
-    sourceManaged in cxf <<= sourceManaged(_ / "cxf"),
-    managedSourceDirectories in Compile <++= (wsdls, sourceManaged in cxf) { (wsdls, basedir) =>
-      wsdls.map(_.outputDirectory(basedir) / "main")
-    },
-    clean in cxf := IO.delete((sourceManaged in cxf).value),
-    wsdl2java <<= (streams, wsdls, sourceManaged in cxf, managedClasspath in cxf).map { (streams, wsdls, basedir, cp) =>
-      val classpath = cp.files
-      (for (wsdl <- wsdls) yield {
-        val output = wsdl.outputDirectory(basedir)
+    managedClasspath in Cxf := Classpaths.managedJars(Cxf, (classpathTypes in Cxf).value, update.value),
+    sourceManaged in Cxf := sourceManaged(_ / "cxf").value,
+    managedSourceDirectories in Compile ++= wsdls.value.map(_.outputDirectory((sourceManaged in Cxf).value) / "main"),
+    clean in Cxf := IO.delete((sourceManaged in Cxf).value),
+    wsdl2java := {
+      val classpath = (managedClasspath in Cxf).value.files
+      (for (wsdl <- wsdls.value) yield {
+        val output = wsdl.outputDirectory((sourceManaged in Cxf).value)
         val mainOutput = output / "main"
         val cacheOutput = output / "cache"
 
         val wsdlFile = Try(url(wsdl.uri)).map(wsdlUrl => IO.urlAsFile(wsdlUrl).getOrElse {
           val wsdlFile = cacheOutput / "wsdl"
-          if (!wsdlFile.exists) IO.download(wsdlUrl, wsdlFile)
+          if (!wsdlFile.exists) download(wsdlUrl, wsdlFile)
           wsdlFile
         }).recover {
           case e: MalformedURLException => file(wsdl.uri)
@@ -70,13 +71,13 @@ object SbtCxf extends AutoPlugin {
 
         val cachedFn = FileFunction.cached(cacheOutput, FilesInfo.lastModified, FilesInfo.exists) { _ =>
           val args = Seq("-d", mainOutput.getAbsolutePath) ++ wsdl.args :+ wsdl.uri
-          callWsdl2java(streams, wsdl.key, mainOutput, args, classpath)
+          callWsdl2java(streams.value, wsdl.key, mainOutput, args, classpath)
           (mainOutput ** "*.java").get.toSet
         }
         cachedFn(Set(wsdlFile))
       }).flatten
     },
-    sourceGenerators in Compile <+= wsdl2java
+    sourceGenerators in Compile += wsdl2java
   )
 
   private def callWsdl2java(streams: TaskStreams, id: String, output: File, args: Seq[String], classpath: Seq[File]) {
